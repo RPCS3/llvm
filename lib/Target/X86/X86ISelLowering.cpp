@@ -33377,6 +33377,372 @@ static SDValue combineCompareEqual(SDNode *N, SelectionDAG &DAG,
   return SDValue();
 }
 
+/// Try to detect sign extension and return the value that is sign-extended.
+static SDValue detectSignToMask(SDValue In, SelectionDAG &DAG, unsigned Width) {
+  In = peekThroughBitcasts(In);
+
+  if (In.getOpcode() == X86ISD::VSRAI && DAG.ComputeNumSignBits(In) == Width)
+    return peekThroughBitcasts(In.getOperand(0));
+  if (In.getOpcode() == X86ISD::PCMPGT &&
+      In.getValueType().getScalarSizeInBits() == Width &&
+      ISD::isBuildVectorAllZeros(In.getOperand(0).getNode()))
+    return peekThroughBitcasts(In.getOperand(1));
+
+  return SDValue();
+}
+
+/// Try to detect ANDNP and test for arguments. If LHS specified, return RHS.
+static SDValue detectANDN(SDValue In, SDValue LHS = SDValue(),
+                          SDValue RHS = SDValue()) {
+  In = peekThroughBitcasts(In);
+  LHS = peekThroughBitcasts(LHS);
+  RHS = peekThroughBitcasts(RHS);
+
+  if (In.getOpcode() == X86ISD::ANDNP) {
+    SDValue N0 = peekThroughBitcasts(In.getOperand(0));
+    SDValue N1 = peekThroughBitcasts(In.getOperand(1));
+
+    if (LHS && N0 != LHS)
+      return SDValue();
+    if (RHS && N1 != RHS)
+      return SDValue();
+    if (LHS)
+      return N1;
+    return N0;
+  }
+
+  if (In.getOpcode() == ISD::AND) {
+    SDValue N0 = peekThroughBitcasts(In.getOperand(0));
+    SDValue N1 = peekThroughBitcasts(In.getOperand(1));
+
+    if (N0.getOpcode() == ISD::XOR && (!RHS || N1 == RHS) &&
+      ISD::isBuildVectorAllOnes(N0.getOperand(1).getNode())) {
+      SDValue R = peekThroughBitcasts(N0.getOperand(0));
+      if (!LHS || R == LHS) {
+        if (LHS)
+          return N1;
+        return R;
+      }
+    }
+
+    if (N1.getOpcode() == ISD::XOR && (!RHS || N0 == RHS) &&
+      ISD::isBuildVectorAllOnes(N1.getOperand(1).getNode())) {
+      SDValue R = peekThroughBitcasts(N1.getOperand(0));
+      if (!LHS || R == LHS) {
+        if (LHS)
+          return N0;
+        return R;
+      }
+    }
+  }
+
+  return SDValue();
+}
+
+/// Try to detect AND and test for arguments. If Op1 specified, return Op2.
+static SDValue detectAND(SDValue In, SDValue Op1 = SDValue(),
+                         SDValue Op2 = SDValue()) {
+  In = peekThroughBitcasts(In);
+  Op1 = peekThroughBitcasts(Op1);
+  Op2 = peekThroughBitcasts(Op2);
+
+  if (In.getOpcode() == ISD::AND) {
+    SDValue N0 = peekThroughBitcasts(In.getOperand(0));
+    SDValue N1 = peekThroughBitcasts(In.getOperand(1));
+
+    // Specifically exclude ANDN
+    if ((N0.getOpcode() == ISD::XOR &&
+         ISD::isBuildVectorAllOnes(N0.getOperand(1).getNode())) ||
+        (N1.getOpcode() == ISD::XOR &&
+         ISD::isBuildVectorAllOnes(N1.getOperand(1).getNode())))
+      return SDValue();
+
+    if (Op1 && Op2) {
+      if (Op1 == N0 && Op2 == N1)
+        return N1;
+      if (Op1 == N1 && Op2 == N0)
+        return N0;
+      return SDValue();
+    }
+
+    if (Op1 && Op1 == N0)
+      return N1;
+    if (Op1 && Op1 == N1)
+      return N0;
+    if (Op1)
+      return SDValue();
+
+    return N0;
+  }
+
+  return SDValue();
+}
+
+/// Try to detect XOR and text for arguments. If Op1 specified, return Op2.
+static SDValue detectXOR(SDValue In, SDValue Op1 = SDValue(),
+                         SDValue Op2 = SDValue()) {
+  In = peekThroughBitcasts(In);
+  Op1 = peekThroughBitcasts(Op1);
+  Op2 = peekThroughBitcasts(Op2);
+
+  if (In.getOpcode() == ISD::XOR) {
+    SDValue N0 = peekThroughBitcasts(In.getOperand(0));
+    SDValue N1 = peekThroughBitcasts(In.getOperand(1));
+
+    // Specifically exclude NOT
+    if (ISD::isBuildVectorAllOnes(N1.getNode()))
+      return SDValue();
+
+    if (Op1 && Op2) {
+      if (Op1 == N0 && Op2 == N1)
+        return N1;
+      if (Op1 == N1 && Op2 == N0)
+        return N0;
+      return SDValue();
+    }
+
+    if (Op1 && Op1 == N0)
+      return N1;
+    if (Op1 && Op1 == N1)
+      return N0;
+    if (Op1)
+      return SDValue();
+
+    return N0;
+  }
+
+  return SDValue();
+}
+
+/// Try to detect OR and text for arguments. If Op1 specified, return Op2.
+static SDValue detectOR(SDValue In, SDValue Op1 = SDValue(),
+                        SDValue Op2 = SDValue()) {
+  In = peekThroughBitcasts(In);
+  Op1 = peekThroughBitcasts(Op1);
+  Op2 = peekThroughBitcasts(Op2);
+
+  if (In.getOpcode() == ISD::OR) {
+    SDValue N0 = peekThroughBitcasts(In.getOperand(0));
+    SDValue N1 = peekThroughBitcasts(In.getOperand(1));
+
+    if (Op1 && Op2) {
+      if (Op1 == N0 && Op2 == N1)
+        return N1;
+      if (Op1 == N1 && Op2 == N0)
+        return N0;
+      return SDValue();
+    }
+
+    if (Op1 && Op1 == N0)
+      return N1;
+    if (Op1 && Op1 == N1)
+      return N0;
+    if (Op1)
+      return SDValue();
+
+    return N0;
+  }
+
+  return SDValue();
+}
+
+///
+static SDValue combineOrToADDUS(SDNode *N, SelectionDAG &DAG,
+                                TargetLowering::DAGCombinerInfo &DCI,
+                                const X86Subtarget &Subtarget)
+{
+  assert(N->getOpcode() == ISD::OR && "Unexpected Opcode");
+  SDValue N0 = peekThroughBitcasts(N->getOperand(0));
+  SDValue N1 = peekThroughBitcasts(N->getOperand(1));
+  EVT VT = N->getValueType(0);
+  EVT AType = N0.getValueType();
+
+  if (!Subtarget.hasSSE2() || !VT.isVector() || VT.getScalarSizeInBits() <= 1)
+    return SDValue();
+  if (N1.getOpcode() == ISD::ADD)
+    std::swap(N0, N1);
+  if (N0.getOpcode() != ISD::ADD)
+    return SDValue();
+  if (AType.getScalarSizeInBits() != 8 && AType.getScalarSizeInBits() != 16)
+    return SDValue();
+
+  N1 = detectSignToMask(N1, DAG, AType.getScalarSizeInBits());
+  if (!N1 || N1.getOpcode() != ISD::OR)
+    return SDValue();
+
+  // X + Y
+  SDValue X = peekThroughBitcasts(N0.getOperand(0));
+  SDValue Y = peekThroughBitcasts(N0.getOperand(1));
+
+  // Carry generate pattern: OR operands
+  SDValue A = peekThroughBitcasts(N1.getOperand(0));
+  SDValue B = peekThroughBitcasts(N1.getOperand(1));
+
+  if (detectAND(A, X, Y))
+    std::swap(A, B);
+  else if (!detectAND(B, X, Y))
+    return SDValue();
+
+  N1 = detectANDN(A, N0);
+  if (!N1 || !detectXOR(N1, X, Y))
+    return SDValue();
+
+  X = DAG.getBitcast(AType, peekThroughBitcasts(X));
+  Y = DAG.getBitcast(AType, peekThroughBitcasts(Y));
+  X = DAG.getNode(X86ISD::ADDUS, SDLoc(N), AType, X, Y);
+  return DAG.getBitcast(VT, X);
+}
+
+///
+static SDValue combineAndToSUBUS(SDNode *N, SelectionDAG &DAG,
+                                 TargetLowering::DAGCombinerInfo &DCI,
+                                 const X86Subtarget &Subtarget)
+{
+  assert(N->getOpcode() == ISD::AND && "Unexpected Opcode");
+  SDValue N0 = peekThroughBitcasts(N->getOperand(0));
+  SDValue N1 = peekThroughBitcasts(N->getOperand(1));
+  EVT VT = N->getValueType(0);
+  EVT AType = N0.getValueType();
+
+  if (!Subtarget.hasSSE2() || !VT.isVector() || VT.getScalarSizeInBits() <= 1)
+    return SDValue();
+  if (N1.getOpcode() == ISD::SUB)
+    std::swap(N0, N1);
+  if (N0.getOpcode() != ISD::SUB)
+    return SDValue();
+  if (AType.getScalarSizeInBits() != 8 && AType.getScalarSizeInBits() != 16)
+    return SDValue();
+
+  if (N1.getOpcode() != ISD::XOR && N1.getOpcode() != X86ISD::PCMPGT)
+    return SDValue();
+  if (!ISD::isBuildVectorAllOnes(N1.getOperand(1).getNode()))
+    return SDValue();
+  if (N1.getOpcode() != X86ISD::PCMPGT) {
+    N1 = detectSignToMask(N1.getOperand(0), DAG, AType.getScalarSizeInBits());
+    if (!N1 || N1.getOpcode() != ISD::OR)
+      return SDValue();
+  } else {
+    if (N1.getValueType() != AType)
+      return SDValue();
+    N1 = peekThroughBitcasts(N1.getOperand(0));
+  }
+
+  // X - Y
+  SDValue X = peekThroughBitcasts(N0.getOperand(0));
+  SDValue Y = peekThroughBitcasts(N0.getOperand(1));
+
+  // Carry generate pattern: OR operands
+  SDValue A = peekThroughBitcasts(N1.getOperand(0));
+  SDValue B = peekThroughBitcasts(N1.getOperand(1));
+
+  if (detectAND(A, Y, N0))
+    std::swap(A, B);
+  else if (!detectAND(B, Y, N0))
+    return SDValue();
+
+  N1 = detectANDN(A, X);
+  if (!N1 || !detectXOR(N1, Y, N0))
+    return SDValue();
+
+  X = DAG.getBitcast(AType, peekThroughBitcasts(X));
+  Y = DAG.getBitcast(AType, peekThroughBitcasts(Y));
+  X = DAG.getNode(X86ISD::SUBUS, SDLoc(N), AType, X, Y);
+  return DAG.getBitcast(VT, X);
+}
+
+///
+static SDValue combineOrToSignSat(SDNode *N, SelectionDAG &DAG,
+                                  TargetLowering::DAGCombinerInfo &DCI,
+                                  const X86Subtarget &Subtarget)
+{
+  assert(N->getOpcode() == ISD::OR && "Unexpected Opcode");
+  SDValue N0 = peekThroughBitcasts(N->getOperand(0));
+  SDValue N1 = peekThroughBitcasts(N->getOperand(1));
+  EVT VT = N->getValueType(0);
+
+  if (!Subtarget.hasSSE2() || !VT.isVector() || VT.getScalarSizeInBits() <= 1)
+    return SDValue();
+
+  // First, detect merge pattern.
+  SDValue N2 = detectANDN(N1);
+  if (N2)
+    std::swap(N0, N1);
+  else
+    N2 = detectANDN(N0);
+  if (!N2)
+    return SDValue();
+
+  // Set N0 to ADD/SUB.
+  N0 = detectANDN(N0, N2);
+  if (N0.getOpcode() != ISD::SUB && N0.getOpcode() != ISD::ADD)
+    return SDValue();
+  EVT AType = N0.getValueType();
+  if (AType.getScalarSizeInBits() != 8 && AType.getScalarSizeInBits() != 16)
+    return SDValue();
+
+  N1 = detectAND(N1, N2);
+  // Set N1 to overflow mask.
+  std::swap(N1, N2);
+
+  N1 = detectSignToMask(N1, DAG, AType.getScalarSizeInBits());
+  if (!N1 || !N2 || N2.getOpcode() != ISD::XOR)
+    return SDValue();
+
+  // Check INT_MIN/INT_MAX generation pattern.
+  APInt IntMax = APInt::getSignedMaxValue(AType.getScalarSizeInBits());
+  if (!ISD::isConstantSplatVector(peekThroughBitcasts(N2.getOperand(1)).getNode(), IntMax))
+    return SDValue();
+  N2 = detectSignToMask(N2.getOperand(0), DAG, AType.getScalarSizeInBits());
+
+  // X ± Y
+  SDValue X = peekThroughBitcasts(N0.getOperand(0));
+  SDValue Y = peekThroughBitcasts(N0.getOperand(1));
+
+  if (N0.getOpcode() == ISD::SUB) {
+    if (X != N2)
+      return SDValue();
+
+    N2 = detectAND(N1);
+    if (!N2)
+      return SDValue();
+    if (!detectXOR(N2, X, Y)) {
+      if (!detectXOR(N2, X, N0))
+        return SDValue();
+      N2 = detectAND(N1, N2);
+      if (!detectXOR(N2, X, Y))
+        return SDValue();
+    } else {
+      N2 = detectAND(N1, N2);
+      if (!detectXOR(N2, X, N0))
+        return SDValue();
+    }
+
+    X = DAG.getBitcast(AType, peekThroughBitcasts(X));
+    Y = DAG.getBitcast(AType, peekThroughBitcasts(Y));
+    X = DAG.getNode(X86ISD::SUBS, SDLoc(N), AType, X, Y);
+    return DAG.getBitcast(VT, X);
+  }
+
+  if (N0.getOpcode() == ISD::ADD) {
+    if (X != N2 && Y != N2)
+      return SDValue();
+
+    N2 = detectANDN(N1);
+    if (!N2 || !detectXOR(N2, X, Y))
+      return SDValue();
+    N2 = detectANDN(N1, N2);
+    if (!detectXOR(N2, X, N0) && !detectXOR(N2, Y, N0))
+      return SDValue();
+
+    X = DAG.getBitcast(AType, peekThroughBitcasts(X));
+    Y = DAG.getBitcast(AType, peekThroughBitcasts(Y));
+    X = DAG.getNode(X86ISD::ADDS, SDLoc(N), AType, X, Y);
+    return DAG.getBitcast(VT, X);
+  }
+
+  return SDValue();
+}
+
 /// Try to fold: (and (xor X, -1), Y) -> (andnp X, Y).
 static SDValue combineANDXORWithAllOnesIntoANDNP(SDNode *N, SelectionDAG &DAG) {
   assert(N->getOpcode() == ISD::AND);
@@ -33658,6 +34024,8 @@ static SDValue combineAndLoadToBZHI(SDNode *Node, SelectionDAG &DAG,
 static SDValue combineAnd(SDNode *N, SelectionDAG &DAG,
                           TargetLowering::DAGCombinerInfo &DCI,
                           const X86Subtarget &Subtarget) {
+  SDValue N0 = N->getOperand(0);
+  SDValue N1 = N->getOperand(1);
   EVT VT = N->getValueType(0);
 
   // If this is SSE1 only convert to FAND to avoid scalarization.
@@ -33676,6 +34044,55 @@ static SDValue combineAnd(SDNode *N, SelectionDAG &DAG,
 
   if (SDValue FPLogic = convertIntLogicToFPLogic(N, DAG, Subtarget))
     return FPLogic;
+
+  if (SDValue SubUSat = combineAndToSUBUS(N, DAG, DCI, Subtarget))
+    return SubUSat;
+
+  if (Subtarget.hasAVX512() && N0.getOpcode() == ISD::XOR && N1.getOpcode() == ISD::XOR) {
+    bool IsSub = true;
+    SDValue N0 = N->getOperand(0);
+    SDValue N1 = N->getOperand(1);
+    if (ISD::isBuildVectorAllOnes(N1.getOperand(1).getNode()))
+      std::swap(N0, N1);
+    if (ISD::isBuildVectorAllOnes(N0.getOperand(1).getNode())) {
+      N0 = N0.getOperand(0);
+      IsSub = false;
+    }
+    SDValue X;
+    SDValue Y;
+    SDValue Z;
+    if (N0.getOperand(0) == N1.getOperand(0)) {
+      X = N0.getOperand(0);
+      Y = N0.getOperand(1);
+      Z = N1.getOperand(1);
+    } else if (N0.getOperand(1) == N1.getOperand(0)) {
+      X = N0.getOperand(1);
+      Y = N0.getOperand(0);
+      Z = N1.getOperand(1);
+    } else if (N0.getOperand(0) == N1.getOperand(1)) {
+      X = N0.getOperand(0);
+      Y = N0.getOperand(1);
+      Z = N1.getOperand(0);
+    } else if (N0.getOperand(1) == N1.getOperand(1)) {
+      X = N0.getOperand(1);
+      Y = N0.getOperand(0);
+      Z = N1.getOperand(0);
+    }
+
+    // Signed overflow detection pattern
+    if (N0.getOpcode() == ISD::XOR && N1.getOpcode() == ISD::XOR) {
+      SDLoc DL(N);
+      X = peekThroughBitcasts(X);
+      Y = peekThroughBitcasts(Y);
+      Z = peekThroughBitcasts(Z);
+      MVT VT64 = MVT::getVectorVT(MVT::i64, VT.getSizeInBits() / 64);
+
+      X = DAG.getNode(X86ISD::VPTERNLOG, DL, VT64, DAG.getBitcast(VT64, X),
+                      DAG.getBitcast(VT64, Y), DAG.getBitcast(VT64, Z),
+                      DAG.getConstant(IsSub ? 0x18 : 0x42, DL, MVT::i8));
+      return DAG.getBitcast(VT, X);
+    }
+  }
 
   if (SDValue R = combineANDXORWithAllOnesIntoANDNP(N, DAG))
     return R;
@@ -33972,6 +34389,10 @@ static SDValue combineOr(SDNode *N, SelectionDAG &DAG,
   SDValue N1 = N->getOperand(1);
   EVT VT = N->getValueType(0);
 
+  // Canonicalize AND to LHS.
+  if (peekThroughBitcasts(N1).getOpcode() == ISD::AND)
+    std::swap(N0, N1);
+
   // If this is SSE1 only convert to FOR to avoid scalarization.
   if (Subtarget.hasSSE1() && !Subtarget.hasSSE2() && VT == MVT::v4i32) {
     return DAG.getBitcast(MVT::v4i32,
@@ -33988,6 +34409,62 @@ static SDValue combineOr(SDNode *N, SelectionDAG &DAG,
 
   if (SDValue FPLogic = convertIntLogicToFPLogic(N, DAG, Subtarget))
     return FPLogic;
+
+  if (SDValue SignSat = combineOrToSignSat(N, DAG, DCI, Subtarget))
+    return SignSat;
+
+  if (SDValue AddUSat = combineOrToADDUS(N, DAG, DCI, Subtarget))
+    return AddUSat;
+
+  if (Subtarget.hasAVX512() && VT.isVector() && VT.getScalarSizeInBits() > 1 &&
+      peekThroughBitcasts(N0).getOpcode() == ISD::AND &&
+      peekThroughBitcasts(N1).getOpcode() == X86ISD::ANDNP) {
+    // TODO: Attempt to match against AND(XOR(-1,X),Y) as well, waiting for
+    // ANDNP combine allows other combines to happen that prevent matching.
+
+    SDValue Z = peekThroughBitcasts(N1).getOperand(0);
+    SDValue X = peekThroughBitcasts(N1).getOperand(1);
+    SDValue Y;
+    if (peekThroughBitcasts(N0).getOperand(0) == Z)
+      Y = peekThroughBitcasts(N0).getOperand(1);
+    if (peekThroughBitcasts(N0).getOperand(1) == Z)
+      Y = peekThroughBitcasts(N0).getOperand(0);
+
+    // Check to see if the mask (Z) appeared in both the AND and ANDNP.
+    if (Y.getNode()) {
+      SDLoc DL(N);
+      Z = peekThroughBitcasts(Z);
+      X = peekThroughBitcasts(X);
+      Y = peekThroughBitcasts(Y);
+      MVT VT64 = MVT::getVectorVT(MVT::i64, VT.getSizeInBits() / 64);
+
+      X = DAG.getNode(X86ISD::VPTERNLOG, DL, VT64, DAG.getBitcast(VT64, Y),
+                      DAG.getBitcast(VT64, X), DAG.getBitcast(VT64, Z),
+                      DAG.getConstant(0xe4, DL, MVT::i8));
+      return DAG.getBitcast(VT, X);
+    }
+
+    // Check carry generate pattern: (X & Y) | ((X ^ Y) & ~Z)
+    X = peekThroughBitcasts(N0).getOperand(0);
+    Y = peekThroughBitcasts(N0).getOperand(1);
+    if (peekThroughBitcasts(N1).getOperand(1).getOperand(1) == X)
+      std::swap(X, Y);
+
+    if (peekThroughBitcasts(N1).getOperand(1).getOpcode() == ISD::XOR &&
+        peekThroughBitcasts(N1).getOperand(1).getOperand(0) == X &&
+        peekThroughBitcasts(N1).getOperand(1).getOperand(1) == Y) {
+      SDLoc DL(N);
+      Z = peekThroughBitcasts(Z);
+      X = peekThroughBitcasts(X);
+      Y = peekThroughBitcasts(Y);
+      MVT VT64 = MVT::getVectorVT(MVT::i64, VT.getSizeInBits() / 64);
+
+      X = DAG.getNode(X86ISD::VPTERNLOG, DL, VT64, DAG.getBitcast(VT64, Y),
+                      DAG.getBitcast(VT64, X), DAG.getBitcast(VT64, Z),
+                      DAG.getConstant(0xd4, DL, MVT::i8));
+      return DAG.getBitcast(VT, X);
+    }
+  }
 
   if (SDValue R = combineLogicBlendIntoPBLENDV(N, DAG, Subtarget))
     return R;
