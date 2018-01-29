@@ -22968,6 +22968,7 @@ static SDValue LowerShift(SDValue Op, const X86Subtarget &Subtarget,
   SDValue R = Op.getOperand(0);
   SDValue Amt = Op.getOperand(1);
   bool ConstantAmt = ISD::isBuildVectorOfConstantSDNodes(Amt.getNode());
+  bool OptForMinSize = DAG.getMachineFunction().getFunction().optForMinSize();
 
   assert(VT.isVector() && "Custom lowering only for vector shifts!");
   assert(Subtarget.hasSSE2() && "Only custom lower when we have SSE2!");
@@ -23178,6 +23179,74 @@ static SDValue LowerShift(SDValue Op, const X86Subtarget &Subtarget,
     SDValue R02 = DAG.getVectorShuffle(VT, dl, R0, R2, {0, -1, 6, -1});
     SDValue R13 = DAG.getVectorShuffle(VT, dl, R1, R3, {-1, 1, -1, 7});
     return DAG.getVectorShuffle(VT, dl, R02, R13, {0, 5, 2, 7});
+  }
+
+  // Alternative version of vector-vector shifts for unsupported types.
+  // Should be more effective with slow cross-lane moves.
+  if ((!OptForMinSize && Subtarget.hasInt256() && VT == MVT::v8i16) ||
+      (Subtarget.hasInt256() && VT == MVT::v16i16) ||
+      (!OptForMinSize && Subtarget.hasAVX512() && VT == MVT::v16i16) ||
+      (Subtarget.hasAVX512() && VT == MVT::v32i16) ||
+      (!OptForMinSize && Subtarget.hasBWI() && VT == MVT::v16i8) ||
+      (!OptForMinSize && Subtarget.hasBWI() && VT == MVT::v32i8) ||
+      (Subtarget.hasBWI() && VT == MVT::v64i8)) {
+    MVT EvtSVT = Subtarget.hasBWI() && VT != MVT::v32i16 ? MVT::i16 : MVT::i32;
+    MVT ExtVT = MVT::getVectorVT(EvtSVT, VT.getVectorNumElements() / 2);
+    int DivCnt = EvtSVT == MVT::i16 ? 4 : 2;
+    MVT Ext32 = MVT::getVectorVT(MVT::i32, VT.getVectorNumElements() / DivCnt);
+    MVT Ext64 = MVT::getVectorVT(MVT::i64, Ext32.getVectorNumElements() / 2);
+    int ShC = EvtSVT == MVT::i16 ? 8 : 16;
+    unsigned MaskValue = EvtSVT == MVT::i16 ? 0xff00U : 0xffff0000U;
+    SDValue MaskH;
+    SDValue AH;
+    SDValue RH;
+
+    R = DAG.getBitcast(ExtVT, R);
+    RH = DAG.getBitcast(ExtVT, R);
+    MaskH = DAG.getConstant(MaskValue, dl, ExtVT);
+    AH = DAG.getBitcast(ExtVT, Amt);
+    AH = DAG.getNode(ISD::SRL, dl, ExtVT, AH, DAG.getConstant(ShC, dl, ExtVT));
+    if (Op->getOpcode() == ISD::SRA) {
+      // Increase shift value in order to emplace it into the low position
+      Amt = DAG.getNode(ISD::ADD, dl, VT, Amt, DAG.getConstant(ShC, dl, VT));
+    }
+    if (VT != MVT::v64i8) {
+      SDValue Mask8 = DAG.getBitcast(VT, MaskH);
+      Amt = DAG.getNode(X86ISD::SUBUS, dl, VT, Amt, Mask8);
+      Amt = DAG.getBitcast(ExtVT, Amt);
+    } else {
+      SDValue Mask64 = DAG.getBitcast(Ext64, MaskH);
+      Amt = DAG.getBitcast(Ext64, Amt);
+      Amt = DAG.getNode(X86ISD::ANDNP, dl, Ext64, Mask64, Amt);
+      Amt = DAG.getBitcast(ExtVT, Amt);
+    }
+    if (Op->getOpcode() == ISD::SHL) {
+      RH = DAG.getNode(ISD::AND, dl, ExtVT, R, MaskH);
+    }
+    if (Op->getOpcode() == ISD::SRL) {
+      SDValue Mask64 = DAG.getBitcast(Ext64, MaskH);
+      R = DAG.getBitcast(Ext64, R);
+      R = DAG.getNode(X86ISD::ANDNP, dl, Ext64, Mask64, R);
+      R = DAG.getBitcast(ExtVT, R);
+    }
+    if (Op->getOpcode() == ISD::SRA) {
+      R = DAG.getNode(ISD::SHL, dl, ExtVT, R, DAG.getConstant(ShC, dl, ExtVT));
+    }
+    RH = DAG.getNode(Op->getOpcode(), dl, ExtVT, RH, AH);
+    R = DAG.getNode(Op->getOpcode(), dl, ExtVT, R, Amt);
+
+    // Merge high and low results (Mask ? RH : R)
+    if (Subtarget.hasAVX512()) {
+      R = DAG.getNode(X86ISD::VPTERNLOG, dl, Ext32, DAG.getBitcast(Ext32, RH),
+                      DAG.getBitcast(Ext32, R), DAG.getBitcast(Ext32, MaskH),
+                      DAG.getConstant(0xe4, dl, MVT::i8));
+    } else {
+      R = DAG.getNode(X86ISD::BLENDI, dl, VT, DAG.getBitcast(VT, R),
+                      DAG.getBitcast(VT, RH),
+                      DAG.getConstant(0xaa, dl, MVT::i8));
+    }
+
+    return DAG.getBitcast(VT, R);
   }
 
   // It's worth extending once and using the vXi16/vXi32 shifts for smaller
