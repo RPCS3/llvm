@@ -36133,6 +36133,10 @@ static SDValue foldXor1SetCC(SDNode *N, SelectionDAG &DAG) {
 static SDValue combineXor(SDNode *N, SelectionDAG &DAG,
                           TargetLowering::DAGCombinerInfo &DCI,
                           const X86Subtarget &Subtarget) {
+  SDValue N0 = N->getOperand(0);
+  SDValue N1 = N->getOperand(1);
+  EVT VT = N->getValueType(0);
+
   // If this is SSE1 only convert to FXOR to avoid scalarization.
   if (Subtarget.hasSSE1() && !Subtarget.hasSSE2() &&
       N->getValueType(0) == MVT::v4i32) {
@@ -36159,6 +36163,20 @@ static SDValue combineXor(SDNode *N, SelectionDAG &DAG,
 
   if (isFNEG(N))
     return combineFneg(N, DAG, Subtarget);
+
+  if (ISD::isBuildVectorAllOnes(N0.getNode()))
+    std::swap(N0, N1);
+
+  if (Subtarget.hasAVX512() && N0.getOpcode() == X86ISD::VPTERNLOG &&
+      ISD::isBuildVectorAllOnes(N1.getNode())) {
+    // Invert ternary logic result by inverting its truth table.
+    SDLoc DL(N);
+    uint64_t C = cast<ConstantSDNode>(N0.getOperand(3))->getZExtValue() ^ 0xff;
+    SDValue R = DAG.getNode(X86ISD::VPTERNLOG, DL, N0.getValueType(),
+                            N0.getOperand(0), N0.getOperand(1),
+                            N0.getOperand(2), DAG.getConstant(C, DL, MVT::i8));
+    return DAG.getBitcast(VT, R);
+  }
   return SDValue();
 }
 
