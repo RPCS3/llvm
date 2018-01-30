@@ -37762,6 +37762,81 @@ static SDValue combineLoopSADPattern(SDNode *N, SelectionDAG &DAG,
   return DAG.getNode(ISD::ADD, DL, VT, Sad, Phi);
 }
 
+/// Detect alternative pattern for AVG.
+static SDValue combineAVGPattern2(SDNode *N, SelectionDAG &DAG,
+                                  const X86Subtarget &Subtarget) {
+  assert(N->getOpcode() == ISD::ADD && "Unexpected opcode");
+  SDValue N0 = N->getOperand(0);
+  SDValue N1 = N->getOperand(1);
+  EVT VT = N->getValueType(0);
+
+  if (!Subtarget.hasSSE2() || !VT.isVector())
+    return SDValue();
+  if (VT.getScalarSizeInBits() != 8 && VT.getScalarSizeInBits() != 16)
+    return SDValue();
+  if (N0.getOpcode() == ISD::ADD)
+    std::swap(N0, N1);
+  if (N1.getOpcode() != ISD::ADD)
+    return SDValue();
+
+  SDValue N2 = N1.getOperand(1);
+  N1 = N1.getOperand(0);
+
+  APInt ConstOne(VT.getScalarSizeInBits(), 1);
+
+  if (N2.getOpcode() == ISD::SRA || N2.getOpcode() == ISD::SRL)
+    std::swap(N1, N2);
+  if (N2.getOpcode() == ISD::SRA || N2.getOpcode() == ISD::SRL)
+    std::swap(N0, N2);
+  if (N0.getOpcode() != ISD::SRA && N0.getOpcode() != ISD::SRL)
+    return SDValue();
+  if (N1.getOpcode() != ISD::SRA && N1.getOpcode() != ISD::SRL)
+    return SDValue();
+  if (!ISD::isConstantSplatVector(N0.getOperand(1).getNode(), ConstOne))
+    return SDValue();
+  if (!ISD::isConstantSplatVector(N1.getOperand(1).getNode(), ConstOne))
+    return SDValue();
+
+  N2 = peekThroughBitcasts(N2);
+  if (N2.getOpcode() != ISD::AND)
+    return SDValue();
+  if (!ISD::isConstantSplatVector(
+          peekThroughBitcasts(N2.getOperand(1)).getNode(), ConstOne))
+    return SDValue();
+
+  bool Sign0 = N0.getOpcode() == ISD::SRA;
+  bool Sign1 = N1.getOpcode() == ISD::SRA;
+  N2 = N2.getOperand(0);
+  N0 = N0.getOperand(0);
+  N1 = N1.getOperand(0);
+
+  if (!detectOR(N2, N0, N1))
+    return SDValue();
+
+  SDLoc DL(N);
+
+  if (Sign0 || Sign1) {
+    // Emulate signed AVG op via unsigned AVG
+    APInt SignM = APInt::getSignedMinValue(VT.getScalarSizeInBits());
+    SDValue SignV = DAG.getConstant(SignM, DL, VT);
+    if (Sign0)
+      N0 = DAG.getNode(ISD::XOR, DL, VT, N0, SignV);
+    if (Sign1)
+      N1 = DAG.getNode(ISD::XOR, DL, VT, N1, SignV);
+    N2 = DAG.getNode(X86ISD::AVG, DL, VT, N0, N1);
+
+    // Signed AVG
+    if (Sign0 && Sign1)
+      return DAG.getNode(ISD::XOR, DL, VT, N2, SignV);
+
+    // Mixed signed-unsigned AVG
+    SDValue SignHalf = DAG.getConstant(SignM.lshr(1), DL, VT);
+    return DAG.getNode(ISD::SUB, DL, VT, N2, SignHalf);
+  }
+  // Unsigned AVG
+  return DAG.getNode(X86ISD::AVG, DL, VT, N0, N1);
+}
+
 /// Convert vector increment or decrement to sub/add with an all-ones constant:
 /// add X, <1, 1...> --> sub X, <-1, -1...>
 /// sub X, <1, 1...> --> add X, <-1, -1...>
@@ -37791,6 +37866,9 @@ static SDValue combineIncDecVector(SDNode *N, SelectionDAG &DAG) {
 
 static SDValue combineAdd(SDNode *N, SelectionDAG &DAG,
                           const X86Subtarget &Subtarget) {
+  if (SDValue Avg = combineAVGPattern2(N, DAG, Subtarget))
+    return Avg;
+
   const SDNodeFlags Flags = N->getFlags();
   if (Flags.hasVectorReduction()) {
     if (SDValue Sad = combineLoopSADPattern(N, DAG, Subtarget))
