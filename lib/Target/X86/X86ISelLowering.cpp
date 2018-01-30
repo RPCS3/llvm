@@ -34094,6 +34094,25 @@ static SDValue combineAnd(SDNode *N, SelectionDAG &DAG,
     }
   }
 
+  if (Subtarget.hasAVX512() && VT.isVector() &&
+      (N0.getOpcode() == ISD::OR || N1.getOpcode() == ISD::OR)) {
+    SDValue N0 = N->getOperand(0);
+    SDValue N1 = N->getOperand(1);
+
+    if (N0.getOpcode() == ISD::OR)
+      std::swap(N0, N1);
+    SDValue N2 = peekThroughBitcasts(N1.getOperand(1));
+    N1 = peekThroughBitcasts(N1.getOperand(0));
+    N0 = peekThroughBitcasts(N0);
+    MVT VT64 = MVT::getVectorVT(MVT::i64, VT.getSizeInBits() / 64);
+
+    SDLoc DL(N);
+    N0 = DAG.getNode(X86ISD::VPTERNLOG, DL, VT64, DAG.getBitcast(VT64, N0),
+                     DAG.getBitcast(VT64, N1), DAG.getBitcast(VT64, N2),
+                     DAG.getConstant(0xe0, DL, MVT::i8));
+    return DAG.getBitcast(VT, N0);
+  }
+
   if (SDValue R = combineANDXORWithAllOnesIntoANDNP(N, DAG))
     return R;
 
