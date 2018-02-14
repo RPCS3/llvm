@@ -22769,8 +22769,20 @@ static SDValue LowerScalarImmediateShift(SDValue Op, SelectionDAG &DAG,
           SDValue Zeros = getZeroVector(VT, Subtarget, DAG, dl);
           if (VT.is512BitVector()) {
             assert(VT == MVT::v64i8 && "Unexpected element type!");
-            SDValue CMP = DAG.getNode(X86ISD::PCMPGTM, dl, MVT::v64i1, Zeros, R);
-            return DAG.getNode(ISD::SIGN_EXTEND, dl, VT, CMP);
+
+            // Clear all bits except sign bit
+            KnownBits Known;
+            DAG.computeKnownBits(R, Known);
+            if (Known.countMinTrailingZeros() < 7) {
+              SDValue MSBMask = DAG.getConstant(0x80, dl, MVT::v64i8);
+              R = DAG.getNode(ISD::AND, dl, MVT::v8i64,
+                              DAG.getBitcast(MVT::v8i64, R),
+                              DAG.getBitcast(MVT::v8i64, MSBMask));
+              R = DAG.getBitcast(MVT::v8i64, R);
+            }
+
+            // addus(0x80, 0x80) produces 0xff
+            return DAG.getNode(X86ISD::ADDUS, dl, MVT::v64i8, R, R);
           }
           return DAG.getNode(X86ISD::PCMPGT, dl, VT, Zeros, R);
         }
@@ -28261,6 +28273,18 @@ unsigned X86TargetLowering::ComputeNumSignBitsForTargetNode(
       break;
     // The remainder is sign extended.
     return VTBits - 7;
+  case X86ISD::ADDUS: {
+    SDValue Src = Op.getOperand(0);
+    if (Src != Op.getOperand(1))
+      break;
+    KnownBits Known;
+    DAG.computeKnownBits(Src, Known, Depth + 1);
+    if (Known.countMinTrailingZeros() < VTBits - 1)
+      break;
+    // If all bits except sign bit are zeros, adding the value to itself with
+    // unsigned saturation is equal to sign extension to max length.
+    return VTBits;
+  }
   }
 
   // Fallback case.
