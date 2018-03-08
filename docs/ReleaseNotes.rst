@@ -5,12 +5,6 @@ LLVM 6.0.0 Release Notes
 .. contents::
     :local:
 
-.. warning::
-   These are in-progress notes for the upcoming LLVM 6 release.
-   Release notes for previous releases can be found on
-   `the Download Page <http://releases.llvm.org/download.html>`_.
-
-
 Introduction
 ============
 
@@ -26,19 +20,14 @@ have questions or comments, the `LLVM Developer's Mailing List
 <http://lists.llvm.org/mailman/listinfo/llvm-dev>`_ is a good place to send
 them.
 
-Note that if you are reading this file from a Subversion checkout or the main
-LLVM web page, this document applies to the *next* release, not the current
-one.  To see the release notes for a specific release, please see the `releases
-page <http://llvm.org/releases/>`_.
-
 Non-comprehensive list of changes in this release
 =================================================
-.. NOTE
-   For small 1-3 sentence descriptions, just add an entry at the end of
-   this list. If your description won't fit comfortably in one bullet
-   point (e.g. maybe you would like to give an example of the
-   functionality, or simply have a lot to talk about), see the `NOTE` below
-   for adding a new subsection.
+
+* Support for `retpolines <https://support.google.com/faqs/answer/7625886>`_
+  was added to help mitigate "branch target injection" (variant #2) of the
+  "Spectre" speculative side channels described by `Project Zero
+  <https://googleprojectzero.blogspot.com/2018/01/reading-privileged-memory-with-side.html>`_
+  and the `Spectre paper <https://spectreattack.com/spectre.pdf>`_.
 
 * The ``Redirects`` argument of ``llvm::sys::ExecuteAndWait`` and
   ``llvm::sys::ExecuteNoWait`` was changed to an ``ArrayRef`` of optional
@@ -56,34 +45,33 @@ Non-comprehensive list of changes in this release
 
 * Significantly improved quality of CodeView debug info for Windows.
 
-* Note..
+* Preliminary support for Sanitizers and sibling features on X86(_64) NetBSD
+  (ASan, UBsan, TSan, MSan, SafeStack, libFuzzer).
 
-.. NOTE
-   If you would like to document a larger change, then you can add a
-   subsection about it right here. You can copy the following boilerplate
-   and un-indent it (the indentation causes it to be inside this comment).
-
-   Special New Feature
-   -------------------
-
-   Makes programs 10x faster by doing Special New Thing.
 
 Changes to the LLVM IR
 ----------------------
 
+* The fast-math-flags (FMF) have been updated. Previously, the 'fast' flag
+  indicated that floating-point reassociation was allowed and all other flags
+  were set too. The 'fast' flag still exists, but there is a new flag called
+  'reassoc' to indicate specifically that reassociation is allowed. A new bit
+  called 'afn' was also added to selectively allow approximations for common
+  mathlib functions like square-root. The new flags provide more flexibility
+  to enable/disable specific floating-point optimizations. Making the
+  optimizer respond appropriately to these flags is an ongoing effort.
+
+
 Changes to the AArch64 Target
 -----------------------------
 
-During this release:
+* Enabled the new GlobalISel instruction selection framework by default at ``-O0``.
 
- * Enabled the new GlobalISel instruction selection framework by default at ``-O0``.
 
 Changes to the ARM Target
 -------------------------
 
-During this release the ARM target has:
-
-* Got support for enabling SjLj exception handling on platforms where it
+* Support for enabling SjLj exception handling on platforms where it
   isn't the default.
 
 
@@ -92,12 +80,12 @@ Changes to the Hexagon Target
 
 * The Hexagon backend now supports V65 ISA.
 
-* The ``-mhvx`` option now takes an optional value that specified the ISA
+* The ``-mhvx`` option now takes an optional value that specifies the ISA
   version of the HVX coprocessor.  The available values are v60, v62 and v65.
   By default, the value is set to be the same as the CPU version.
 
 * The compiler option ``-mhvx-double`` is deprecated and will be removed in
-  the next release of the compiler. Programmers should use ``-mhvx-length``
+  the next release of the compiler. Programmers should use the ``-mhvx-length``
   option to specify the desired vector length: ``-mhvx-length=64b`` for
   64-byte vectors and ``-mhvx-length=128b`` for 128-byte vectors. While the
   current default vector length is 64 bytes, users should always specify the
@@ -112,13 +100,45 @@ Changes to the Hexagon Target
 Changes to the MIPS Target
 --------------------------
 
- During this release ...
+Fixed numerous bugs:
 
+* fpowi on MIPS64 giving incorrect results when used with a negative integer.
+* Usage of the asm 'c' constraint with the wrong datatype causing an
+  assert/crash.
+* Fixed a conversion bug when using the DSP ASE.
+* Fixed an inconsistency where objects were not marked as using the microMIPS as
+  when the micromips function attribute or the ".set micromips" directive was
+  used.
+* Reordered the MIPSR6 specific hazard scheduler pass to after the delay slot
+  filler, fixing a class of rare edge case bugs where the delay slot filler
+  would violate ISA restrictions.
+* Fixed a crash when using a type of unknown size with gp relative addressing.
+* Corrected the j macro for microMIPS.
+* Corrected the encoding of movep for microMIPS32r6.
+* Fixed an issue with the usage of insert instructions having an invalid set of
+  operands.
+* Fixed an issue where TLS symbols were not marked as such.
+* Enabled the usage of register scavenging with MSA, due to its shorter offsets
+  for loads and stores.
+* Corrected the ELF headers when using the DSP ASE.
 
-Changes to the PowerPC Target
------------------------------
+New features:
 
- During this release ...
+* The long branch pass now generates some R6 specific instructions when
+  targeting MIPSR6.
+* The delay slot filler now performs more branch conversions if delay slots
+  cannot be filled.
+* The MIPS MT ASE is now fully supported.
+* Added support for the ``lapc`` pseudo instruction.
+* Improved the selection of multiple instructions (``dext``, ``nmadd``,
+  ``nmsub``).
+* Further improved microMIPS codesize reduction.
+
+Deprecation notices:
+
+* microMIPS64R6 support was been deprecated since 5.0, and has now been
+  completely removed.
+
 
 Changes to the SystemZ Target
 -----------------------------
@@ -132,35 +152,65 @@ During this release the SystemZ target has:
 Changes to the X86 Target
 -------------------------
 
-During this release ...
+During this release the X86 target has:
 
-* Got support for enabling SjLj exception handling on platforms where it
+* Added support for enabling SjLj exception handling on platforms where it
   isn't the default.
 
-Changes to the AMDGPU Target
------------------------------
+* Added intrinsics for Intel Extensions: VAES, GFNI, VPCLMULQDQ, AVX512VBMI2, AVX512BITALG, AVX512VNNI.
 
- During this release ...
+* Added support for Intel Icelake CPU.
 
-Changes to the AVR Target
------------------------------
+* Fixed some X87 codegen bugs.
 
- During this release ...
+* Added instruction scheduling information for Intel Sandy Bridge, Ivy Bridge, Haswell, Broadwell, and Skylake CPUs.
 
-Changes to the OCaml bindings
------------------------------
+* Improved scheduler model for AMD Jaguar CPUs.
 
- During this release ...
+* Improved llvm-mc's disassembler for some EVEX encoded instructions.
 
+* Add support for i8 and i16 vector signed/unsigned min/max horizontal reductions.
 
-Changes to the C API
---------------------
+* Improved codegen for memory comparisons
 
- During this release ...
+* Improved codegen for i32 vector multiplies
+
+* Improved codegen for scalar integer absolute values
+
+* Improved codegen for vector integer rotations (XOP and AVX512)
+
+* Improved codegen of data being transferred between GPRs and K-registers.
+
+* Improved codegen for vector truncations.
+
+* Improved folding of address computations into gather/scatter instructions.
+
+* Gained initial support recognizing variable shuffles from vector element extracts and inserts.
+
+* Improved documentation for SSE/AVX intrinsics in intrin.h header files.
+
+* Gained support for emitting `retpolines
+  <https://support.google.com/faqs/answer/7625886>`_, including automatic
+  insertion of the necessary thunks or using external thunks.
 
 
 External Open Source Projects Using LLVM 6
 ==========================================
+
+LDC - the LLVM-based D compiler
+-------------------------------
+
+`D <http://dlang.org>`_ is a language with C-like syntax and static typing. It
+pragmatically combines efficiency, control, and modeling power, with safety and
+programmer productivity. D supports powerful concepts like Compile-Time Function
+Execution (CTFE) and Template Meta-Programming, provides an innovative approach
+to concurrency and offers many classical paradigms.
+
+`LDC <http://wiki.dlang.org/LDC>`_ uses the frontend from the reference compiler
+combined with LLVM as backend to produce efficient native code. LDC targets
+x86/x86_64 systems like Linux, OS X, FreeBSD and Windows and also Linux on ARM
+and PowerPC (32/64 bit). Ports to other architectures like AArch64 and MIPS64
+are underway.
 
 JFS - JIT Fuzzing Solver
 ------------------------
@@ -187,21 +237,6 @@ LLVM IR features such as Aliases. Zig uses Clang to provide automatic
 import of .h symbols - even inline functions and macros. Zig uses LLD combined
 with lazily building compiler-rt to provide out-of-the-box cross-compiling for
 all supported targets.
-
-LDC - the LLVM-based D compiler
--------------------------------
-
-`D <http://dlang.org>`_ is a language with C-like syntax and static typing. It
-pragmatically combines efficiency, control, and modeling power, with safety and
-programmer productivity. D supports powerful concepts like Compile-Time Function
-Execution (CTFE) and Template Meta-Programming, provides an innovative approach
-to concurrency and offers many classical paradigms.
-
-`LDC <http://wiki.dlang.org/LDC>`_ uses the frontend from the reference compiler
-combined with LLVM as backend to produce efficient native code. LDC targets
-x86/x86_64 systems like Linux, OS X, FreeBSD and Windows and also Linux on ARM
-and PowerPC (32/64 bit). Ports to other architectures like AArch64 and MIPS64
-are underway.
 
 Additional Information
 ======================
