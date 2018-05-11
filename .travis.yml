@@ -1,0 +1,31 @@
+language: c++
+
+before_script:
+    - mkdir build ; cd build
+    - CC=clang-6.0 CXX=clang++-6.0 cmake .. -G Ninja -DLLVM_TARGETS_TO_BUILD="X86" -DCMAKE_BUILD_TYPE=Release -DLLVM_BUILD_RUNTIME=OFF -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_DOCS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF
+
+script:
+    - ninja
+
+before_deploy:
+    - cd build
+    - tar -czf llvmlibs-linux.tar.gz lib include 
+
+deploy:
+    provider: releases
+    name: continuous-${TRAVIS_BRANCH}
+    api_key:
+        secure:Kn0QvOaGpog3/tzWAWdRPXd0nviKBvPMd2MPZJr49vdu0FrYsG320mVz4sZZpmmLPB/x3LRhEkeKjhOfnDLL4lyZX7xRQWoRvSwm8N+II08bBfuVcFQVjvD8rtpFfUfLRM//WAZDxvbjlq+wYZ9cspQrI4k+qmk7DcExDxefvWqY/gdzs/f8oW0+5kFfnGAsS6ELa8cA8oKLcccG7F7mTGFTJq0FAXUmcBa6EQ98ESHgB6QsHOPrWb2tTl1O7Z3RYjXkbA/KQIrsyxLoF3Y8yhLvXp5HoCw/8bIdyPLGh6ESxRLTtt5f1WdZlHe+o8ICD/Cl4aKTSfWUvuYwE34iEcJ48o2IqqBkYJDR0zmYmnvIppxiu3wf7xNm4Dp52NKoYjbnI3yqYql08sU+4sdIpEQLq/Kex0ZwW1dW6io7evbOGw1uY7uXy5AmiGFQHQo+rls6IR3WypYH7IB2fxnhk/5+IPyJvnYW9R1BTbrCGxPibvO+f9nj/x4dCGxmr+TAcq9ZmF92ggCp7GnbdE5wLL6BvtgW4DqbI4dmLs+7CmoStP7nfIUQH2k1Sh5y01Wi2h0GIblHq4BKa9FyihlWFSPUW1c1B/4pTqiI4hb0kS/P/rXFtraa38bEhauYoW+X7Z4QwUqxjvHJ030SZLkA8IHFHkLwgxUBxzzHCpRSPWM=
+    file: build/llvmlibs-linux.tar.gz
+    on:
+        tags: false
+addons:
+    apt:
+        sources:
+            - ubuntu-toolchain-r-test
+            - llvm-toolchain-trusty-6.0
+        packages:
+            - cmake
+            - libstdc++-5-dev
+            - clang-6.0
+            - ninja-build
