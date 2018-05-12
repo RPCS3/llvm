@@ -7,25 +7,18 @@ cache:
 
 before_script:
     - mkdir build ; cd build
-    - CC=clang CXX=clang++ CXXFLAGS="-g -msse -msse2" cmake .. -G Ninja -DLLVM_ENABLE_RTTI=ON -DLLVM_ENABLE_CXX1Y=ON -DLLVM_TARGETS_TO_BUILD="X86" -DCMAKE_BUILD_TYPE=Release -DLLVM_BUILD_RUNTIME=OFF -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_DOCS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_TOOLS=OFF -DLLVM_INCLUDE_UTILS=OFF -DWITH_POLLY=OFF
+    - CC=clang CXX=clang++ CXXFLAGS="-g -msse -msse2" cmake .. -G Ninja -DCMAKE_INSTALL_PREFIX="" -DLLVM_CCACHE_BUILD=ON -DLLVM_ENABLE_RTTI=ON -DLLVM_ENABLE_CXX1Y=ON -DLLVM_TARGETS_TO_BUILD="X86" -DCMAKE_BUILD_TYPE=Release -DLLVM_BUILD_RUNTIME=OFF -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_DOCS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_TOOLS=OFF -DLLVM_INCLUDE_UTILS=OFF -DWITH_POLLY=OFF
 
 script:
     - ninja -j 2
 
-before_deploy:
-    - tar -czf llvmlibs-linux.tar.gz lib include 
-
-deploy:
-    provider: releases
-    name: continuous-${TRAVIS_BRANCH}
-    api_key:
-        secure: jAi4Mk2lyAcBDn6Hy2R0bIqWeJXiMT4jR7Eo8gnHD5SP5ReAAFQhDb2W0XuzzFtKf5jqsMVTxJQP4nOkPaO4RFoxAnjdrN0cf3wwCuXHmnfnJq8khvugVUIDADzLdkOIWmagy/EcCXaMHMqJX7d2nOJoDgV8MPx9xmTWBQDzh2GpKhNnTePSIKaatMBkgwzoVK/yIFBe3kP16zP2RydEOcohpIzIGsR6tG/MEablueZqYJ2aH2Xsqjt16QHxV6vBFtw8YWVCttLiXwFvWDzY/wh8xcmPWLYHUvA/+IWlk+dLkBHFItW8Myfb1IdV+1Zqd9fUtRG7k2Q8ztdBeCBH2J1c0v8XwUPGTA3Yu8aI4wCwLAlOrHJQo4wvDVQMBocI8Cv0QMPauFl1cDOHOoFfHQeQJYuOkFASu0yAu/LBUoV1jXwwlfIZ6ug9MHTymV3MmEAHuUDoxEkx4mV684a7SwLschE+3vcy0EcogNz14sZqMn+i8No1v0dGc09vx81+DBpYPuPsrCXqnk+0Ov2i23IxPTsutH7pNmf7q72qZL++stzkAPNLLVPX5U254e6L8ebjwa2IROwQ1xhejnbjo3Hd2GzSVBpZTKa3v7qIJdEZUF2R91DqRYp1bpWm1TuvveMn7WGfHbPRtmXvc853ghaN9zgC/jOR51ZcQVO4PHk=
-    file: build/llvmlibs-linux.tar.gz
-    overwrite: true
-    skip_cleanup: true
-    on:
-        branch: release_60
-        tags: false
+after_script:
+    - DESTDIR=./dest ninja install
+    - cd dest
+    - tar -czf llvmlibs-linux.tar.gz lib include bin
+    - wget -c https://github.com/probonopd/uploadtool/raw/master/upload.sh
+    - export UPLOADTOOL_SUFFIX=linux-release_60
+    - bash upload.sh ./llvmlibs-linux.tar.gz
 addons:
     apt:
         sources:
