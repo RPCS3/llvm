@@ -1,0 +1,60 @@
+os: Visual Studio 2015
+platform: x64
+clone_folder: C:\rpcs3\llvm
+shallow_clone: true
+
+configuration:
+  - Release
+
+before_build:
+  - ps: $env:Date="$(git show -s --date=short --format='%ad')"
+  - cd ..\
+  - mkdir llvm_build
+  - cd llvm_build
+  - cmake -G "Visual Studio 14 Win64" ../llvm -DLLVM_TARGETS_TO_BUILD="X86" -DLLVM_DEFAULT_TARGET_TRIPLE:STRING=x86_64-pc-windows-msvc -DLLVM_HOST_TRIPLE:STRING=x86_64-pc-windows-msvc -DCMAKE_BUILD_TYPE=Release -Thost=x64 -DLLVM_BUILD_RUNTIME=OFF  -DLLVM_BUILD_TOOLS=OFF  -DLLVM_INCLUDE_DOCS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DWITH_POLLY=ON -DCMAKE_SYSTEM_VERSION=6.1 -DCMAKE_VS_WINDOWS_TARGET_PLATFORM_VERSION=8.1
+  - dir
+build_script:
+  - cmake --build . --config Release -- /maxcpucount /logger:"C:\Program Files\AppVeyor\BuildAgent\Appveyor.MSBuildLogger.dll"
+after_build:
+  - cd ..\
+  - mkdir build
+  - cd build
+  - mkdir llvm
+  - cd llvm
+  - mkdir cmake
+  - mkdir include
+  - mkdir tools
+  - cd tools
+  - cd ..\
+  - xcopy "..\..\llvm\cmake" ".\cmake" /E
+  - xcopy "..\..\llvm\include" ".\include" /E
+  - cd ..\
+  - mkdir llvm_build
+  - cd llvm_build
+  - mkdir Release
+  - mkdir include
+  - mkdir lib
+  - cd lib
+  - mkdir cmake
+  - cd ..\
+  - xcopy "..\..\llvm_build\Release" ".\Release" /E
+  - xcopy  "..\..\llvm_build\include" ".\include" /E
+  - xcopy  "..\..\llvm_build\lib\cmake" ".\lib\cmake" /E
+  - cd ..\
+  - 7z a -t7z -m0=lzma2 -mx=9 -aoa -r "llvmlibs.7z" *
+  - move .\llvmlibs.7z C:\rpcs3\llvm\
+
+artifacts:
+    - path: .\*.7z
+      name: llvmlibs
+
+deploy:
+  provider: GitHub
+  release: continuous-master
+  description: 'Prebuilt LLVM Libraries'
+  artifact: llvmlibs
+  auth_token:
+    secure: gTZqN6J9QNQTv9vu2qtExWk1x4o9dSfyTH/y86Yhe3qu+2w6Mly1MaDFMaXgrN1e
+  draft: false
+  prerelease: false
+  force_update: true

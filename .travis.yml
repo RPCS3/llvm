@@ -1,0 +1,27 @@
+language: c++
+
+cache: ccache
+
+before_script:
+    - mkdir build ; cd build
+    - CC=clang CXX=clang++ CXXFLAGS="-msse -msse2" cmake .. -G Ninja -DCMAKE_INSTALL_PREFIX="" -DLLVM_CCACHE_DIR=$HOME/.ccache -DLLVM_CCACHE_BUILD=ON -DLLVM_ENABLE_CXX1Y=ON -DLLVM_TARGETS_TO_BUILD="X86" -DCMAKE_BUILD_TYPE=Release -DLLVM_BUILD_RUNTIME=OFF -DLLVM_BUILD_TOOLS=OFF -DLLVM_INCLUDE_DOCS=OFF -DLLVM_INCLUDE_EXAMPLES=OFF -DLLVM_INCLUDE_TESTS=OFF -DLLVM_INCLUDE_TOOLS=OFF -DLLVM_INCLUDE_UTILS=OFF -DWITH_POLLY=ON
+
+script:
+    - ninja -j 2
+
+after_script:
+    - DESTDIR=./dest ninja install
+    - cd dest
+    - tar -czf llvmlibs-linux.tar.gz lib include bin
+    - sha256sum ./llvmlibs-linux.tar.gz | awk '{ print $1}' >> llvmlibs-linux.tar.gz.sha256
+    - wget -c https://github.com/probonopd/uploadtool/raw/master/upload.sh
+    - export UPLOADTOOL_SUFFIX=linux-master
+    - bash upload.sh ./llvmlibs-linux*
+addons:
+    apt:
+        sources:
+            - ubuntu-toolchain-r-test
+        packages:
+            - cmake
+            - libstdc++-5-dev
+            - ninja-build
