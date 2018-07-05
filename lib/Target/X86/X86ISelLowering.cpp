@@ -33057,6 +33057,38 @@ static SDValue combineSelect(SDNode *N, SelectionDAG &DAG,
     }
   }
 
+  // Remove VSELECT from AVX2+ variable shifts (shl, lshr) for inf precision.
+  if (N->getOpcode() == ISD::VSELECT && Cond.getOpcode() == ISD::SETCC &&
+      SupportedVectorVarShift(VT.getSimpleVT(), Subtarget, ISD::SHL)) {
+    ISD::CondCode CC = cast<CondCodeSDNode>(Cond.getOperand(2))->get();
+
+    // Check if one of the arms of the VSELECT is a zero vector. If it's on the
+    // left side invert the predicate to simplify logic below.
+    SDValue Other;
+    if (ISD::isBuildVectorAllZeros(LHS.getNode())) {
+      Other = RHS;
+      CC = ISD::getSetCCInverse(CC, true);
+    } else if (ISD::isBuildVectorAllZeros(RHS.getNode())) {
+      Other = LHS;
+    }
+
+    // Look for the following patterns:
+    // y <  32 ? x << y : 0 --> x << y
+    // y <= 31 ? x << y : 0 --> x << y
+    APInt CondRHS;
+    if (Other && Other.getNumOperands() == 2 &&
+        DAG.isEqualTo(Other.getOperand(1), Cond.getOperand(0)) &&
+        (Other.getOpcode() == ISD::SHL || Other.getOpcode() == ISD::SRL) &&
+        ISD::isConstantSplatVector(Cond.getOperand(1).getNode(), CondRHS)) {
+
+      // Just remove VSELECT for legal shl or lshr shift types.
+      if (CC == ISD::SETULT && CondRHS == VT.getScalarSizeInBits())
+        return Other;
+      if (CC == ISD::SETULE && CondRHS == VT.getScalarSizeInBits() - 1)
+        return Other;
+    }
+  }
+
   // Match VSELECTs into subs with unsigned saturation.
   if (N->getOpcode() == ISD::VSELECT && Cond.getOpcode() == ISD::SETCC &&
       // psubus is available in SSE2 and AVX2 for i8 and i16 vectors.
