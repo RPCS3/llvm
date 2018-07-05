@@ -196,7 +196,7 @@ X86TargetLowering::X86TargetLowering(const X86TargetMachine &TM,
   // Integer absolute.
   if (Subtarget.hasCMov()) {
     setOperationAction(ISD::ABS            , MVT::i16  , Custom);
-    setOperationAction(ISD::ABS            , MVT::i32  , Custom); 
+    setOperationAction(ISD::ABS            , MVT::i32  , Custom);
   }
   setOperationAction(ISD::ABS              , MVT::i64  , Custom);
 
@@ -34622,7 +34622,7 @@ static SDValue scalarizeExtEltFP(SDNode *ExtElt, SelectionDAG &DAG) {
   }
 
   // TODO: This switch could include FNEG and the x86-specific FP logic ops
-  // (FAND, FANDN, FOR, FXOR). But that may require enhancements to avoid 
+  // (FAND, FANDN, FOR, FXOR). But that may require enhancements to avoid
   // missed load folding and fma+fneg combining.
   switch (Vec.getOpcode()) {
   case ISD::FMA: // Begin 3 operands
@@ -35306,6 +35306,38 @@ static SDValue combineSelect(SDNode *N, SelectionDAG &DAG,
       if (CC == ISD::SETGE)
         std::swap(LHS, RHS);
       return DAG.getNode(X86ISD::BLENDV, DL, VT, Other, LHS, RHS);
+    }
+  }
+
+  // Remove VSELECT from AVX2+ variable shifts (shl, lshr) for inf precision.
+  if (N->getOpcode() == ISD::VSELECT && Cond.getOpcode() == ISD::SETCC &&
+      SupportedVectorVarShift(VT.getSimpleVT(), Subtarget, ISD::SHL)) {
+    ISD::CondCode CC = cast<CondCodeSDNode>(Cond.getOperand(2))->get();
+
+    // Check if one of the arms of the VSELECT is a zero vector. If it's on the
+    // left side invert the predicate to simplify logic below.
+    SDValue Other;
+    if (ISD::isBuildVectorAllZeros(LHS.getNode())) {
+      Other = RHS;
+      CC = ISD::getSetCCInverse(CC, true);
+    } else if (ISD::isBuildVectorAllZeros(RHS.getNode())) {
+      Other = LHS;
+    }
+
+    // Look for the following patterns:
+    // y <  32 ? x << y : 0 --> x << y
+    // y <= 31 ? x << y : 0 --> x << y
+    APInt CondRHS;
+    if (Other && Other.getNumOperands() == 2 &&
+        DAG.isEqualTo(Other.getOperand(1), Cond.getOperand(0)) &&
+        (Other.getOpcode() == ISD::SHL || Other.getOpcode() == ISD::SRL) &&
+        ISD::isConstantSplatVector(Cond.getOperand(1).getNode(), CondRHS)) {
+
+      // Just remove VSELECT for legal shl or lshr shift types.
+      if (CC == ISD::SETULT && CondRHS == VT.getScalarSizeInBits())
+        return Other;
+      if (CC == ISD::SETULE && CondRHS == VT.getScalarSizeInBits() - 1)
+        return Other;
     }
   }
 
