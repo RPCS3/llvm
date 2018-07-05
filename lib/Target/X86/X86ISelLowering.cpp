@@ -33018,6 +33018,45 @@ static SDValue combineSelect(SDNode *N, SelectionDAG &DAG,
     }
   }
 
+  // Match VSELECTs into adds with unsigned saturation.
+  if (N->getOpcode() == ISD::VSELECT && Cond.getOpcode() == ISD::SETCC &&
+      ((Subtarget.hasSSE2() && (VT == MVT::v16i8 || VT == MVT::v8i16)) ||
+       (Subtarget.hasAVX() && (VT == MVT::v32i8 || VT == MVT::v16i16)) ||
+       (Subtarget.hasBWI() && (VT == MVT::v64i8 || VT == MVT::v32i16)))) {
+    ISD::CondCode CC = cast<CondCodeSDNode>(Cond.getOperand(2))->get();
+
+    // Check if one of the arms of the VSELECT is a ones vector. If it's on the
+    // left side invert the predicate to simplify logic below.
+    SDValue Other;
+    if (ISD::isBuildVectorAllOnes(LHS.getNode())) {
+      Other = RHS;
+      CC = ISD::getSetCCInverse(CC, true);
+    } else if (ISD::isBuildVectorAllOnes(RHS.getNode())) {
+      Other = LHS;
+    }
+
+    if (Other && CC == ISD::SETUGE && Other.getOpcode() == ISD::ADD &&
+        DAG.isEqualTo(Other, Cond.getOperand(0))) {
+      SDValue OpLHS = Other.getOperand(0);
+      SDValue OpRHS = Other.getOperand(1);
+      SDValue CondRHS = Cond.getOperand(1);
+
+      auto ADDUSBuilder = [](SelectionDAG &DAG, const SDLoc &DL,
+                             ArrayRef<SDValue> Ops) {
+        return DAG.getNode(X86ISD::ADDUS, DL, Ops[0].getValueType(), Ops);
+      };
+
+      // Look for a general add with unsigned saturation first.
+      // x+y >= x ? x+y : -1 --> addus x, y
+      // x+y >= y ? x+y : -1 --> addus x, y
+      if (DAG.isEqualTo(OpLHS, CondRHS) || DAG.isEqualTo(OpRHS, CondRHS))
+        return SplitOpsAndApply(DAG, Subtarget, DL, VT, {OpLHS, OpRHS},
+                                ADDUSBuilder);
+
+      // TODO: constants
+    }
+  }
+
   // Match VSELECTs into subs with unsigned saturation.
   if (N->getOpcode() == ISD::VSELECT && Cond.getOpcode() == ISD::SETCC &&
       // psubus is available in SSE2 and AVX2 for i8 and i16 vectors.
