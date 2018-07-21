@@ -390,16 +390,12 @@ JITSymbol MCJIT::findSymbol(const std::string &Name,
 uint64_t MCJIT::getGlobalValueAddress(const std::string &Name) {
   MutexGuard locked(lock);
   uint64_t Result = getSymbolAddress(Name, false);
-  if (Result != 0)
-    finalizeLoadedModules();
   return Result;
 }
 
 uint64_t MCJIT::getFunctionAddress(const std::string &Name) {
   MutexGuard locked(lock);
   uint64_t Result = getSymbolAddress(Name, true);
-  if (Result != 0)
-    finalizeLoadedModules();
   return Result;
 }
 
