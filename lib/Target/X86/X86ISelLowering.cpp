@@ -33075,9 +33075,13 @@ static SDValue combineSelect(SDNode *N, SelectionDAG &DAG,
 
   // Match VSELECTs into subs with unsigned saturation.
   if (N->getOpcode() == ISD::VSELECT && Cond.getOpcode() == ISD::SETCC &&
-      // psubus is available in SSE2 and AVX2 for i8 and i16 vectors.
       ((Subtarget.hasSSE2() && (VT == MVT::v16i8 || VT == MVT::v8i16)) ||
-       (Subtarget.hasAVX() && (VT == MVT::v32i8 || VT == MVT::v16i16)))) {
+       (Subtarget.hasAVX() && (VT == MVT::v32i8 || VT == MVT::v16i16)) ||
+       (Subtarget.hasBWI() && (VT == MVT::v64i8 || VT == MVT::v32i16)) ||
+       (Subtarget.hasSSE41() && VT == MVT::v4i32 && Cond.hasOneUse()) ||
+       (Subtarget.hasAVX2() && VT == MVT::v8i32 && Cond.hasOneUse()) ||
+       (Subtarget.hasAVX512() && VT == MVT::v16i32 && Cond.hasOneUse()) ||
+       (Subtarget.hasAVX512() && VT == MVT::v8i64 && Cond.hasOneUse()))) {
     ISD::CondCode CC = cast<CondCodeSDNode>(Cond.getOperand(2))->get();
 
     // Check if one of the arms of the VSELECT is a zero vector. If it's on the
@@ -33097,7 +33101,13 @@ static SDValue combineSelect(SDNode *N, SelectionDAG &DAG,
 
       auto SUBUSBuilder = [](SelectionDAG &DAG, const SDLoc &DL,
                              ArrayRef<SDValue> Ops) {
-        return DAG.getNode(X86ISD::SUBUS, DL, Ops[0].getValueType(), Ops);
+        EVT VT = Ops[0].getValueType();
+        if (VT.getScalarSizeInBits() >= 32) {
+          // There is no 32-bit SUBUS, but UMIN+SUB should be cheap enough.
+          SDValue Min = DAG.getNode(ISD::UMIN, DL, VT, Ops);
+          return DAG.getNode(ISD::SUB, DL, VT, Ops[0], Min);
+        }
+        return DAG.getNode(X86ISD::SUBUS, DL, VT, Ops);
       };
 
       // Look for a general sub with unsigned saturation first.
