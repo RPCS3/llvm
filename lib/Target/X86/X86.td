@@ -570,6 +570,7 @@ def ProcessorFeatures {
                                                   FeatureINVPCID,
                                                   FeatureLZCNT,
                                                   FeatureMOVBE,
+                                                  FeatureRTM,
                                                   FeatureFastVariableShuffle];
   list<SubtargetFeature> HSWSpecificFeatures = [FeaturePOPCNTFalseDeps,
                                                 FeatureLZCNTFalseDeps];
