@@ -1,5 +1,7 @@
 language: c++
 
+dist: xenial
+
 cache: ccache
 
 before_script:
