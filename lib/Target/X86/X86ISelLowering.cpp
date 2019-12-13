@@ -26043,7 +26043,7 @@ static SDValue LowerShift(SDValue Op, const X86Subtarget &Subtarget,
     if (Subtarget.hasAVX512()) {
       R = DAG.getNode(X86ISD::VPTERNLOG, dl, Ext32, DAG.getBitcast(Ext32, RH),
                       DAG.getBitcast(Ext32, R), DAG.getBitcast(Ext32, MaskH),
-                      DAG.getConstant(0xe4, dl, MVT::i8));
+                      DAG.getTargetConstant(0xe4, dl, MVT::i8));
     } else {
       R = DAG.getNode(X86ISD::BLENDI, dl, VT, DAG.getBitcast(VT, R),
                       DAG.getBitcast(VT, RH),
@@ -40304,7 +40304,7 @@ static SDValue detectAVGPattern(SDValue In, EVT VT, SelectionDAG &DAG,
     if (!Carry && Subtarget.hasAVX512())
       if (ScalarVT == MVT::i32 || ScalarVT == MVT::i64)
         Carry = DAG.getNode(X86ISD::VPTERNLOG, DL, VT, Ops[0], Ops[1], One,
-                            DAG.getConstant(0xA8, DL, MVT::i8));
+                            DAG.getTargetConstant(0xA8, DL, MVT::i8));
     if (!Carry) {
       Carry = DAG.getNode(ISD::OR, DL, VT, Ops);
       Carry = DAG.getNode(ISD::AND, DL, VT, Carry, One);
@@ -41956,7 +41956,7 @@ static SDValue combineXor(SDNode *N, SelectionDAG &DAG,
     uint64_t C = cast<ConstantSDNode>(N0.getOperand(3))->getZExtValue() ^ 0xff;
     SDValue R = DAG.getNode(X86ISD::VPTERNLOG, DL, N0.getValueType(),
                             N0.getOperand(0), N0.getOperand(1),
-                            N0.getOperand(2), DAG.getConstant(C, DL, MVT::i8));
+                            N0.getOperand(2), DAG.getTargetConstant(C, DL, MVT::i8));
     return DAG.getBitcast(VT, R);
   }
   return SDValue();
